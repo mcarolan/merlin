@@ -2,6 +2,7 @@
 
 mod cli;
 mod sql_parser;
+mod table;
 
 use cli::*;
 

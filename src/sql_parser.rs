@@ -9,21 +9,30 @@ use nom::{
 };
 
 #[derive(PartialEq, Eq, Debug, Clone)]
+pub struct CreateTable {
+    table_name: String,
+    column_specs: Vec<ColumnSpec>,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct Select {
+    column_refs: Vec<SelectColumnReference>,
+    table_name: String,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct Insert {
+    column_refs: Vec<String>,
+    column_values: Vec<InsertValue>,
+    table_name: String,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Statement {
-    CreateTable {
-        table_name: String,
-        column_specs: Vec<ColumnSpec>,
-    },
+    CreateTable(CreateTable),
     ShowTables,
-    Select {
-        column_refs: Vec<SelectColumnReference>,
-        table_name: String,
-    },
-    Insert {
-        column_refs: Vec<String>,
-        column_values: Vec<InsertValue>,
-        table_name: String,
-    },
+    Select(Select),
+    Insert(Insert),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -101,10 +110,10 @@ impl Statement {
 
         Ok((
             input,
-            Statement::CreateTable {
+            Statement::CreateTable(CreateTable {
                 table_name,
                 column_specs,
-            },
+            }),
         ))
     }
 
@@ -115,26 +124,33 @@ impl Statement {
         let (input, table_name) = parse_id(input)?;
         Ok((
             input,
-            Statement::Select {
+            Statement::Select(Select {
                 column_refs,
                 table_name,
-            },
+            }),
         ))
     }
 
     fn parse_insert(input: &str) -> IResult<&str, Statement> {
-      let (input, _) = parse_keyword("insert")(input)?;
-      let (input, _) = parse_keyword("into")(input)?;
-      let (input, table_name) = parse_id(input)?;
-      let (input, _) = recognize(char('('))(input)?;
-      let (input, column_refs) = separated_list1(tag(","), parse_id)(input)?;
-      let (input, _) = recognize(char(')'))(input)?;
-      let (input, _) = parse_keyword("values")(input)?;
-      let (input, _) = recognize(char('('))(input)?;
-      let (input, column_values) = separated_list1(tag(","), InsertValue::parse)(input)?;
-      let (input, _) = recognize(char(')'))(input)?;
+        let (input, _) = parse_keyword("insert")(input)?;
+        let (input, _) = parse_keyword("into")(input)?;
+        let (input, table_name) = parse_id(input)?;
+        let (input, _) = recognize(char('('))(input)?;
+        let (input, column_refs) = separated_list1(tag(","), parse_id)(input)?;
+        let (input, _) = recognize(char(')'))(input)?;
+        let (input, _) = parse_keyword("values")(input)?;
+        let (input, _) = recognize(char('('))(input)?;
+        let (input, column_values) = separated_list1(tag(","), InsertValue::parse)(input)?;
+        let (input, _) = recognize(char(')'))(input)?;
 
-      Ok((input, Statement::Insert { column_refs, column_values, table_name }))
+        Ok((
+            input,
+            Statement::Insert(Insert {
+                column_refs,
+                column_values,
+                table_name,
+            }),
+        ))
     }
 
     fn parse_show_tables(input: &str) -> IResult<&str, Statement> {
@@ -203,7 +219,10 @@ fn parse_keyword<'a>(expected_keyword: &'a str) -> impl Fn(&'a str) -> IResult<&
 
 fn parse_id(input: &str) -> IResult<&str, String> {
     map(
-        tuple((preceded(multispace0, alpha1), terminated(alphanumeric0, multispace0))),
+        tuple((
+            preceded(multispace0, alpha1),
+            terminated(alphanumeric0, multispace0),
+        )),
         |(start, rest)| format!("{}{}", start, rest),
     )(input)
 }
@@ -257,7 +276,7 @@ mod tests {
                 .unwrap();
         assert_eq!("", remaining);
         assert_eq!(
-            Statement::CreateTable {
+            Statement::CreateTable(CreateTable {
                 table_name: "person".to_string(),
                 column_specs: vec![
                     ColumnSpec {
@@ -273,14 +292,14 @@ mod tests {
                         column_type: ColumnType::Boolean
                     },
                 ]
-            },
+            }),
             matched
         );
 
         let (remaining, matched) = Statement::parse("   CREATE     TABLE person(  name   varchar ( 255 )\n,   age  number,    male   boolean)\n").unwrap();
         assert_eq!("\n", remaining);
         assert_eq!(
-            Statement::CreateTable {
+            Statement::CreateTable(CreateTable {
                 table_name: "person".to_string(),
                 column_specs: vec![
                     ColumnSpec {
@@ -296,7 +315,7 @@ mod tests {
                         column_type: ColumnType::Boolean
                     },
                 ]
-            },
+            }),
             matched
         );
     }
@@ -306,17 +325,17 @@ mod tests {
         let (remaining, matched) = Statement::parse("select * from person").unwrap();
         assert_eq!("", remaining);
         assert_eq!(
-            Statement::Select {
+            Statement::Select(Select {
                 column_refs: vec![SelectColumnReference::Wildcard],
                 table_name: "person".to_string()
-            },
+            }),
             matched
         );
 
         let (remaining, matched) = Statement::parse("select name, age from person").unwrap();
         assert_eq!("", remaining);
         assert_eq!(
-            Statement::Select {
+            Statement::Select(Select {
                 column_refs: vec![
                     SelectColumnReference::Named {
                         column_name: "name".to_string()
@@ -326,7 +345,7 @@ mod tests {
                     }
                 ],
                 table_name: "person".to_string()
-            },
+            }),
             matched
         );
     }
@@ -338,7 +357,7 @@ mod tests {
                 .unwrap();
         assert_eq!("", remaining);
         assert_eq!(
-            Statement::Insert {
+            Statement::Insert(Insert {
                 column_refs: vec!["name".to_string(), "age".to_string(), "male".to_string()],
                 column_values: vec![
                     InsertValue::Varchar {
@@ -348,7 +367,7 @@ mod tests {
                     InsertValue::Boolean { value: true }
                 ],
                 table_name: "person".to_string()
-            },
+            }),
             matched
         );
         let (remaining, matched) =
@@ -356,7 +375,7 @@ mod tests {
                 .unwrap();
         assert_eq!("", remaining);
         assert_eq!(
-            Statement::Insert {
+            Statement::Insert(Insert {
                 column_refs: vec!["name".to_string(), "age".to_string(), "male".to_string()],
                 column_values: vec![
                     InsertValue::Varchar {
@@ -366,7 +385,7 @@ mod tests {
                     InsertValue::Boolean { value: true }
                 ],
                 table_name: "person".to_string()
-            },
+            }),
             matched
         );
     }
