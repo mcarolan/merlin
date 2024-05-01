@@ -52,7 +52,7 @@ pub enum ColumnType {
 impl ColumnType {
     fn bytes_len(&self) -> usize {
         match self {
-            ColumnType::Varchar { max_len } => 8 + (max_len * 4),
+            ColumnType::Varchar { max_len } => 8 + max_len,
             ColumnType::Number => 8,
             ColumnType::Boolean => 1,
         }
@@ -304,7 +304,7 @@ mod tests {
                     Value::Varchar {
                         value: "hello".to_string(),
                     },
-                    8 + (5 * 4),
+                    8 + 5,
                 ),
                 (Value::Number { value: 42 }, 8),
             ],
@@ -353,7 +353,7 @@ mod tests {
         let values = vec![
             Value::Boolean { value: true },
             Value::Varchar {
-                value: "hello".to_string(),
+                value: "foo".to_string(),
             },
             Value::Number { value: 42 },
         ];
