@@ -10,8 +10,8 @@ use nom::{
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct CreateTable {
-    table_name: String,
-    column_specs: Vec<ColumnSpec>,
+    pub table_name: String,
+    pub column_specs: Vec<ColumnSpec>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -170,8 +170,8 @@ impl Statement {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct ColumnSpec {
-    name: String,
-    column_type: ColumnType,
+    pub name: String,
+    pub column_type: ColumnType,
 }
 
 impl ColumnSpec {
@@ -185,7 +185,7 @@ impl ColumnSpec {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ColumnType {
-    Varchar { max_length: u8 },
+    Varchar { max_length: u32 },
     Number,
     Boolean,
 }
@@ -194,7 +194,7 @@ impl ColumnType {
     fn parse_varchar(input: &str) -> IResult<&str, ColumnType> {
         let (input, _) = parse_keyword("varchar")(input)?;
         let (input, _) = parse_keyword("(")(input)?;
-        let (input, max_length) = preceded(multispace0, terminated(u8, multispace0))(input)?;
+        let (input, max_length) = preceded(multispace0, terminated(u32, multispace0))(input)?;
         let (input, _) = parse_keyword(")")(input)?;
         Ok((input, ColumnType::Varchar { max_length }))
     }

@@ -8,7 +8,7 @@ pub enum Value {
 }
 
 pub struct Table {
-    column_specs: Vec<ColumnSpec>,
+    pub column_specs: Vec<ColumnSpec>,
     pages: Vec<Vec<u8>>,
     row_size: usize,
     rows_per_page: usize,
@@ -38,8 +38,8 @@ impl Table {
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ColumnSpec {
-    column_name: String,
-    column_type: ColumnType,
+    pub column_name: String,
+    pub column_type: ColumnType,
 }
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]

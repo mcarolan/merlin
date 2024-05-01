@@ -51,6 +51,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "console",
+ "lazy_static",
  "nom",
 ]
 
