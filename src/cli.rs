@@ -70,36 +70,28 @@ pub fn print_table(name: &String, table: &Table) {
     let name_style: Style = Style::new().yellow().bold();
     println!("{}", name_style.apply_to(name));
 
-    let fields: (String, Vec<String>) = (
-        "Field".to_string(),
-        table
-            .column_specs
-            .iter()
-            .map(|cs| cs.column_name.clone())
-            .collect(),
-    );
-    let types: (String, Vec<String>) = (
-        "Type".to_string(),
-        table
-            .column_specs
-            .iter()
-            .map(|cs| format!("{}", cs.column_type))
-            .collect(),
-    );
-    draw_string_table(vec![fields, types]);
+    let header = vec![ "Field".to_string(), "Type".to_string() ];
+
+    let mut rows: Vec<Vec<String>> = table.column_specs.iter().map(|cs| {
+        let field = cs.column_name.clone();
+        let field_type = format!("{}", cs.column_type);
+        vec![ field, field_type ]
+    }).collect();
+
+    draw_string_table(&header, &rows);
 }
 
-fn draw_string_table(table: Vec<(String, Vec<String>)>) {
+fn draw_string_table(header: &Vec<String>, rows: &Vec<Vec<String>>) {
     const PADDING_H: usize = 1;
 
-    let column_widths: Vec<usize> = table
+    let column_widths: Vec<usize> = header
         .iter()
-        .map(|(k, v)| {
-            v.iter()
+        .map(|h| {
+            rows.iter()
                 .map(|v| v.len())
                 .max()
-                .unwrap_or(k.len())
-                .max(k.len())
+                .unwrap_or(h.len())
+                .max(h.len()) + (2 * PADDING_H)
         })
         .collect();
 
@@ -122,12 +114,12 @@ fn draw_string_table(table: Vec<(String, Vec<String>)>) {
         for _ in 0..PADDING_H {
             print!(" ");
         }
-        let header = table
+        let header_text = header
             .get(i)
-            .map(|(k, _)| k.clone())
+            .map(|k| k.clone())
             .unwrap_or_else(|| " ".repeat(*width));
-        print!("{}", header);
-        for _ in 0..PADDING_H + width - header.len() {
+        print!("{}", header_text);
+        for _ in 0..PADDING_H + width - header_text.len() {
             print!(" ");
         }
     }
@@ -146,18 +138,17 @@ fn draw_string_table(table: Vec<(String, Vec<String>)>) {
         }
     }
 
-    let rows = table.first().map(|(_, v)| v.len()).unwrap_or_default();
 
-    for i in 0..rows {
+    for (i, row) in rows.iter().enumerate() {
         println!();
         for (j, width) in column_widths.iter().enumerate() {
             print!("┃");
             for _ in 0..PADDING_H {
                 print!(" ");
             }
-            let value = table
+            let value = row
                 .get(j)
-                .and_then(|(_, v)| v.get(i).map(|s| s.clone()))
+                .map(|s| s.clone())
                 .unwrap_or_else(|| " ".repeat(*width));
 
             print!("{}", value);
