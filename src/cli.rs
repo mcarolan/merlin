@@ -66,13 +66,25 @@ pub fn print_invalid_statement_syntax(error_message: &str) {
     );
 }
 
+pub fn print_error(message: &str) {
+    let error: Style = Style::new().red().bold();
+    println!("{}", error.apply_to(message));
+}
+
+pub fn print_insert_success(table_name: &String, row_count: usize) {
+    let success: Style = Style::new().green().bold();
+    let name_style: Style = Style::new().yellow().bold();
+    let plural = if row_count > 1 { "s" } else { "" };
+    println!("{}. Table {} has {} row{}.", success.apply_to("Insert successful"), name_style.apply_to(table_name), row_count, plural);
+}
+
 pub fn print_table(name: &String, table: &Table) {
     let name_style: Style = Style::new().yellow().bold();
     println!("{}", name_style.apply_to(name));
 
     let header = vec![ "Field".to_string(), "Type".to_string() ];
 
-    let mut rows: Vec<Vec<String>> = table.column_specs.iter().map(|cs| {
+    let rows: Vec<Vec<String>> = table.column_specs.iter().map(|cs| {
         let field = cs.column_name.clone();
         let field_type = format!("{}", cs.column_type);
         vec![ field, field_type ]
@@ -184,11 +196,5 @@ impl std::fmt::Display for table::ColumnType {
             table::ColumnType::Boolean => write!(f, "boolean")?,
         }
         Ok(())
-    }
-}
-
-impl std::fmt::Display for table::Table {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
     }
 }

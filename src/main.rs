@@ -5,15 +5,15 @@ mod mapper;
 mod sql_parser;
 mod table;
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, iter, sync::Mutex};
 
 use cli::*;
 use lazy_static::lazy_static;
 use mapper::ColumnSpecMapper;
-use sql_parser::CreateTable;
+use sql_parser::{CreateTable, Insert, Select};
 use table::{ColumnSpec, Table};
 
-use crate::sql_parser::Statement;
+use crate::{mapper::InsertValueMapper, sql_parser::Statement, table::Row};
 
 lazy_static! {
     static ref TABLES: Mutex<HashMap<String, Table>> = Mutex::new(HashMap::new());
@@ -39,6 +39,52 @@ fn exec_show_tables() {
     println!();
 }
 
+fn exec_insert(insert: &Insert) {
+    let mut map = TABLES.lock().unwrap();
+    let table = map.get_mut(&insert.table_name);
+
+    match table {
+        Some(table) => {
+            let values: Vec<table::Value> = insert.column_values.iter().map(|v| InsertValueMapper::sql_parser_to_table(&v)).collect();
+            let name_values = insert.column_refs.iter().chain(iter::repeat(&String::new())).zip(values).map(|(k, v)| (k.clone(), v)).collect();
+            let row_build = Row::new(&name_values, &table.column_specs);
+
+            match row_build {
+                Ok(row) => {
+                    table.insert(row);
+                    print_insert_success(&insert.table_name, table.row_count);
+                },
+                Err(err) => print_error(format!("Insert failed. {:?}", err).as_str())
+            }
+        },
+        None => {
+            print_error(format!("Insert failed. No table named '{}' is defined.", insert.table_name).as_str());
+        },
+    }
+}
+
+fn exec_select(select: &Select) {
+    let mut map = TABLES.lock().unwrap();
+    let table = map.get_mut(&select.table_name);
+
+    match table {
+        Some(table) => {
+            let named_columns: Vec<String> = select.column_refs.iter().map(|c| match c {
+                sql_parser::SelectColumnReference::Named { column_name } => Some(column_name.clone()),
+                sql_parser::SelectColumnReference::Wildcard => None,
+            }).flatten().collect();
+            let unknown_columns: Vec<&String> = named_columns.iter().filter(|c1| {
+                table.column_specs.iter().filter(|c2| c2.column_name == **c1).count() == 0
+            }).collect();
+            
+            todo!()
+        },
+        None => {
+            print_error(format!("Insert failed. No table named '{}' is defined.", select.table_name).as_str());
+        }
+    }
+}
+
 fn main() {
     print_wizard();
     println!("");
@@ -51,7 +97,7 @@ fn main() {
             Ok((_, Statement::CreateTable(fields))) => exec_create_table(&fields),
             Ok((_, Statement::Select(_))) => todo!(),
             Ok((_, Statement::ShowTables)) => exec_show_tables(),
-            Ok((_, Statement::Insert(_))) => todo!(),
+            Ok((_, Statement::Insert(insert))) => exec_insert(&insert),
             Err(error_message) => {
                 print_invalid_statement_syntax(format!("{}", error_message).as_str())
             }

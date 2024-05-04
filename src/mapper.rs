@@ -22,3 +22,15 @@ impl ColumnTypeMapper {
     }
   }
 }
+
+pub struct InsertValueMapper {}
+
+impl InsertValueMapper {
+  pub fn sql_parser_to_table(insert_value: &sql_parser::InsertValue) -> table::Value {
+    match insert_value {
+        sql_parser::InsertValue::Varchar { value } => table::Value::Varchar { value: value.clone() },
+        sql_parser::InsertValue::Number { value } => table::Value::Number { value: *value },
+        sql_parser::InsertValue::Boolean { value } => table::Value::Boolean { value: *value },
+    }
+  }
+}

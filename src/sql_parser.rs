@@ -16,15 +16,15 @@ pub struct CreateTable {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Select {
-    column_refs: Vec<SelectColumnReference>,
-    table_name: String,
+    pub column_refs: Vec<SelectColumnReference>,
+    pub table_name: String,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Insert {
-    column_refs: Vec<String>,
-    column_values: Vec<InsertValue>,
-    table_name: String,
+    pub column_refs: Vec<String>,
+    pub column_values: Vec<InsertValue>,
+    pub table_name: String,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

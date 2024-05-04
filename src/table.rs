@@ -12,6 +12,7 @@ pub struct Table {
     pages: Vec<Vec<u8>>,
     row_size: usize,
     rows_per_page: usize,
+    pub row_count: usize
 }
 
 impl Table {
@@ -32,7 +33,26 @@ impl Table {
             pages: Vec::new(),
             row_size,
             rows_per_page,
+            row_count: 0
         }
+    }
+
+    pub fn insert(&mut self, row: Row) {
+        self.row_count += 1;
+        let page_no = self.row_count / Table::PAGE_SIZE;
+        let offset = self.row_count % Table::PAGE_SIZE;
+
+
+        let page = match self.pages.get_mut(page_no) {
+            Some(page) => page,
+            None => {
+                let page = vec![0; Table::PAGE_SIZE];
+                self.pages.resize(self.pages.len() + 1, page);
+                &mut self.pages[page_no]
+            }
+        };
+
+        row.write(page, offset);
     }
 }
 
@@ -78,7 +98,7 @@ pub enum RowBuildError {
 }
 
 impl Row {
-    fn build(
+    pub fn new(
         column_values: &HashMap<String, Value>,
         column_specs: &Vec<ColumnSpec>,
     ) -> Result<Row, RowBuildError> {
@@ -218,7 +238,7 @@ mod tests {
         ];
         let column_values = HashMap::from([("bar".to_string(), Value::Boolean { value: true })]);
 
-        let result = Row::build(&column_values, &column_specs).err();
+        let result = Row::new(&column_values, &column_specs).err();
 
         let expected_error = RowBuildError::ColumnNameMismatch {
             actual: column_values.keys().cloned().collect(),
@@ -235,7 +255,7 @@ mod tests {
         }];
         let column_values = HashMap::from([("foo".to_string(), Value::Number { value: 42 })]);
 
-        let result = Row::build(&column_values, &column_specs).err();
+        let result = Row::new(&column_values, &column_specs).err();
 
         let expected_error = RowBuildError::ValueTypeMismatch {
             column_name: "foo".to_string(),
@@ -258,7 +278,7 @@ mod tests {
             },
         )]);
 
-        let result = Row::build(&column_values, &column_specs).err();
+        let result = Row::new(&column_values, &column_specs).err();
 
         let expected_error = RowBuildError::ValueTypeMismatch {
             column_name: "foo".to_string(),
@@ -295,7 +315,7 @@ mod tests {
             ("baz".to_string(), Value::Number { value: 42 }),
         ]);
 
-        let result = Row::build(&column_values, &column_specs).ok();
+        let result = Row::new(&column_values, &column_specs).ok();
 
         let expected = Row {
             values: vec![
@@ -363,7 +383,7 @@ mod tests {
             .zip(values.iter().cloned())
             .collect();
 
-        let row = Row::build(&column_values, &column_specs).unwrap();
+        let row = Row::new(&column_values, &column_specs).unwrap();
         let mut buffer: Vec<u8> = vec![0; Table::PAGE_SIZE];
         row.write(&mut buffer, 0);
         let result = row.read(&buffer, &column_specs, 0);
