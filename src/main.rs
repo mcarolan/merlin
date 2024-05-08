@@ -10,7 +10,7 @@ use std::{collections::HashMap, iter, sync::Mutex};
 use cli::*;
 use lazy_static::lazy_static;
 use mapper::ColumnSpecMapper;
-use sql_parser::{CreateTable, Insert, Select};
+use sql_parser::{CreateTable, CsvImport, Insert, Select};
 use table::{ColumnSpec, Table};
 
 use crate::{mapper::InsertValueMapper, sql_parser::Statement, table::Row};
@@ -85,6 +85,23 @@ fn exec_select(select: &Select) {
     }
 }
 
+fn exec_csv_import(import: &CsvImport) {
+    let mut map = TABLES.lock().unwrap();
+    let table = map.get_mut(&import.table_name);
+
+    match table {
+        Some(table) => {
+            match table.csv_import(&import.file_path, &import.column_mapping) {
+                Ok(_) => todo!(),
+                Err(err) => print_error(format!("CSV import failed. {:?}", err).as_str()),
+            }
+        },
+        None => {
+            print_error(format!("Insert failed. No table named '{}' is defined.", import.table_name).as_str());
+        }
+    }
+}
+
 fn main() {
     print_wizard();
     println!("");
@@ -95,9 +112,10 @@ fn main() {
 
         match statement {
             Ok((_, Statement::CreateTable(fields))) => exec_create_table(&fields),
-            Ok((_, Statement::Select(_))) => todo!(),
+            Ok((_, Statement::Select(fields))) => exec_select(&fields),
             Ok((_, Statement::ShowTables)) => exec_show_tables(),
             Ok((_, Statement::Insert(insert))) => exec_insert(&insert),
+            Ok((_, Statement::CsvImport(fields))) => exec_csv_import(&fields),
             Err(error_message) => {
                 print_invalid_statement_syntax(format!("{}", error_message).as_str())
             }

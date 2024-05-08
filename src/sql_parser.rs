@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_until},
@@ -28,11 +30,19 @@ pub struct Insert {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
+pub struct CsvImport {
+    pub column_mapping: HashMap<String, String>,
+    pub file_path: String,
+    pub table_name: String,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Statement {
     CreateTable(CreateTable),
     ShowTables,
     Select(Select),
     Insert(Insert),
+    CsvImport(CsvImport),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -42,18 +52,18 @@ pub enum InsertValue {
     Boolean { value: bool },
 }
 
+fn parse_string(input: &str) -> IResult<&str, String> {
+    let (input, _) = preceded(multispace0, tag("\""))(input)?;
+    let (input, value) = take_until("\"")(input)?;
+    let (input, _) = terminated(tag("\""), multispace0)(input)?;
+    Ok((input, value.to_string()))
+}
+
 impl InsertValue {
     //TODO: allow escapes
     fn parse_varchar(input: &str) -> IResult<&str, InsertValue> {
-        let (input, _) = preceded(multispace0, tag("\""))(input)?;
-        let (input, value) = take_until("\"")(input)?;
-        let (input, _) = terminated(tag("\""), multispace0)(input)?;
-        Ok((
-            input,
-            InsertValue::Varchar {
-                value: value.to_string(),
-            },
-        ))
+        let (input, value) = parse_string(input)?;
+        Ok((input, InsertValue::Varchar { value: value }))
     }
 
     fn parse_number(input: &str) -> IResult<&str, InsertValue> {
@@ -131,6 +141,36 @@ impl Statement {
         ))
     }
 
+    fn parse_csv_column_mapping(input: &str) -> IResult<&str, (String, String)> {
+        let (input, id1) = parse_id(input)?;
+        let (input, _) = tag("=")(input)?;
+        let (input, id2) = parse_id(input)?;
+        Ok((input, (id1, id2)))
+    }
+
+    fn parse_csv_import(input: &str) -> IResult<&str, Statement> {
+        let (input, _) = parse_keyword("import")(input)?;
+        let (input, _) = parse_keyword("csv")(input)?;
+        let (input, _) = parse_keyword("from")(input)?;
+        let (input, file_path) = parse_string(input)?;
+        let (input, _) = parse_keyword("into")(input)?;
+        let (input, table_name) = parse_id(input)?;
+        let (input, _) = parse_keyword("with")(input)?;
+        let (input, _) = parse_keyword("(")(input)?;
+        let (input, column_mapping) =
+            separated_list1(tag(","), Statement::parse_csv_column_mapping)(input)?;
+        let (input, _) = parse_keyword(")")(input)?;
+
+        Ok((
+            input,
+            Statement::CsvImport(CsvImport {
+                column_mapping: column_mapping.into_iter().collect(),
+                file_path,
+                table_name,
+            }),
+        ))
+    }
+
     fn parse_insert(input: &str) -> IResult<&str, Statement> {
         let (input, _) = parse_keyword("insert")(input)?;
         let (input, _) = parse_keyword("into")(input)?;
@@ -164,6 +204,7 @@ impl Statement {
             Statement::parse_select,
             Statement::parse_insert,
             Statement::parse_show_tables,
+            Statement::parse_csv_import
         ))(input)
     }
 }
@@ -385,6 +426,28 @@ mod tests {
                     InsertValue::Boolean { value: true }
                 ],
                 table_name: "person".to_string()
+            }),
+            matched
+        );
+    }
+
+    #[test]
+    fn test_csv_import() {
+        let (remaining, matched) =
+            Statement::parse("import csv from \"/home/martinc/spotify.csv\" into music with (title=Title, artist=Artist, rank=Rank, date=Date, region=Region)")
+                .unwrap();
+        assert_eq!("", remaining);
+        assert_eq!(
+            Statement::CsvImport(CsvImport {
+                table_name: "music".to_string(),
+                column_mapping: HashMap::from_iter([
+                    ("title".to_string(), "Title".to_string()),
+                    ("artist".to_string(), "Artist".to_string()),
+                    ("rank".to_string(), "Rank".to_string()),
+                    ("date".to_string(), "Date".to_string()),
+                    ("region".to_string(), "Region".to_string())
+                ]),
+                file_path: "/home/martinc/spotify.csv".to_string()
             }),
             matched
         );

@@ -1,4 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::{self, BufRead, BufReader},
+};
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum Value {
@@ -12,7 +16,7 @@ pub struct Table {
     pages: Vec<Vec<u8>>,
     row_size: usize,
     rows_per_page: usize,
-    pub row_count: usize
+    pub row_count: usize,
 }
 
 impl Table {
@@ -33,15 +37,14 @@ impl Table {
             pages: Vec::new(),
             row_size,
             rows_per_page,
-            row_count: 0
+            row_count: 0,
         }
     }
 
     pub fn insert(&mut self, row: Row) {
-        self.row_count += 1;
         let page_no = self.row_count / Table::PAGE_SIZE;
         let offset = self.row_count % Table::PAGE_SIZE;
-
+        self.row_count += 1;
 
         let page = match self.pages.get_mut(page_no) {
             Some(page) => page,
@@ -53,6 +56,87 @@ impl Table {
         };
 
         row.write(page, offset);
+    }
+
+    pub fn csv_import(
+        &mut self,
+        csv_path: &String,
+        column_mapping: &HashMap<String, String>,
+    ) -> io::Result<()> {
+        let input = File::open(csv_path)?;
+        let mut lines = BufReader::new(input).lines().flatten();
+
+        let header_line = lines
+            .next()
+            .ok_or(io::Error::other("CSV must contain at least one line"));
+
+        let header_map: Result<HashMap<String, usize>, io::Error> = header_line.map(|line| {
+            line.split(",")
+                .enumerate()
+                .map(|(k, v)| (v.to_string(), k))
+                .collect()
+        });
+
+        let cs = self.column_specs.clone();
+
+        let header: Result<Vec<(usize, &ColumnSpec)>, io::Error> = header_map.and_then(|header_map| {cs.iter().map(|cs| {
+            column_mapping
+                .get(&cs.column_name)
+                .ok_or(io::Error::other(format!(
+                "Incomplete CSV import mapping. No mapping for table column '{}'",
+                cs.column_name
+            ))).and_then(|csv_column_name| {
+                header_map.get(csv_column_name.as_str()).cloned().ok_or(io::Error::other(format!(
+                    "Bad CSV import mapping. Table column '{}' is mapped to CSV column '{}', but that doesn't exist!", cs.column_name, csv_column_name)))
+            }).map(|i| (i, cs))
+        }).collect()});
+
+        let header: Vec<(usize, &ColumnSpec)> = match header {
+            Ok(header) => header,
+            Err(err) => return Err(err),
+        };
+
+        let mut result: io::Result<()> = Ok(());
+        for (i, line) in lines.enumerate() {
+            let value_map: HashMap<usize, &str> = line.split(",").enumerate().collect();
+
+            let values: io::Result<HashMap<String, Value>> = header
+                .iter()
+                .map(|(csv_index, cs)| {
+                    value_map
+                        .get(csv_index)
+                        .ok_or(io::Error::other(format!(
+                            "Row {} did not contain enough fields to extract column {}",
+                            i, cs.column_name
+                        )))
+                        .and_then(|string_value| {
+                            cs.column_type
+                                .parse(&string_value)
+                                .ok_or(io::Error::other(format!(
+                                    "Row {} failed to parse value '{}' into {:?}",
+                                    i, string_value, cs.column_type
+                                )))
+                        })
+                        .map(|v| (cs.column_name.to_string(), v))
+                })
+                .collect();
+
+            let row = values.and_then(|values| {
+                Row::new(&values, &self.column_specs)
+                    .map_err(|rb| io::Error::other(format!("Failed to build row {}: {:?}", i, rb)))
+            });
+
+            match row {
+                Ok(row) => {
+                    self.insert(row);
+                }
+                Err(err) => {
+                    result = Err(err);
+                    break;
+                }
+            }
+        }
+        result
     }
 }
 
@@ -75,6 +159,23 @@ impl ColumnType {
             ColumnType::Varchar { max_len } => 8 + max_len,
             ColumnType::Number => 8,
             ColumnType::Boolean => 1,
+        }
+    }
+
+    fn parse(&self, s: &str) -> Option<Value> {
+        match self {
+            ColumnType::Varchar { max_len } if s.len() <= *max_len => Some(Value::Varchar {
+                value: s.to_string(),
+            }),
+            ColumnType::Varchar { max_len: _ } => None,
+
+            ColumnType::Number => u64::from_str_radix(s, 10)
+                .ok()
+                .map(|i| Value::Number { value: i }),
+
+            ColumnType::Boolean if s == "true" => Some(Value::Boolean { value: true }),
+            ColumnType::Boolean if s == "false" => Some(Value::Boolean { value: false }),
+            ColumnType::Boolean => None,
         }
     }
 }
