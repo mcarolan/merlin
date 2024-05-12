@@ -4,6 +4,8 @@ use std::{
     io::{self, BufRead, BufReader},
 };
 
+use nom::InputTake;
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum Value {
     Varchar { value: String },
@@ -25,11 +27,7 @@ impl Table {
     pub fn new(column_specs: &Vec<ColumnSpec>) -> Table {
         let row_size: usize = column_specs
             .iter()
-            .map(|c| match c.column_type {
-                ColumnType::Varchar { max_len } => 8 + (max_len * 4),
-                ColumnType::Number => 8,
-                ColumnType::Boolean => 1,
-            })
+            .map(|c| c.column_type.bytes_len())
             .sum();
         let rows_per_page = Table::PAGE_SIZE / row_size;
         Table {
@@ -41,9 +39,14 @@ impl Table {
         }
     }
 
-    pub fn insert(&mut self, row: Row) {
-        let page_no = self.row_count / Table::PAGE_SIZE;
-        let offset = self.row_count % Table::PAGE_SIZE;
+    fn page_and_offset<'a>(&self, i: usize) -> (usize, usize) {
+        let page_no = i / self.rows_per_page;
+        let offset = i % self.rows_per_page;
+        (page_no, offset)
+    }
+
+    pub fn insert(&mut self, row: &Row) {
+        let (page_no, offset) = self.page_and_offset(self.row_count);
         self.row_count += 1;
 
         let page = match self.pages.get_mut(page_no) {
@@ -62,64 +65,52 @@ impl Table {
         &mut self,
         csv_path: &String,
         column_mapping: &HashMap<String, String>,
+        with_truncate: bool
     ) -> io::Result<()> {
-        let input = File::open(csv_path)?;
-        let mut lines = BufReader::new(input).lines().flatten();
-
-        let header_line = lines
-            .next()
-            .ok_or(io::Error::other("CSV must contain at least one line"));
-
-        let header_map: Result<HashMap<String, usize>, io::Error> = header_line.map(|line| {
-            line.split(",")
-                .enumerate()
-                .map(|(k, v)| (v.to_string(), k))
-                .collect()
-        });
-
+        let mut reader = csv::Reader::from_path(csv_path)?;
+        
         let cs = self.column_specs.clone();
 
-        let header: Result<Vec<(usize, &ColumnSpec)>, io::Error> = header_map.and_then(|header_map| {cs.iter().map(|cs| {
+        let header: Result<Vec<(usize, &ColumnSpec)>, String> = reader.headers().map_err(|e| todo!()).and_then(|header_map| {cs.iter().map(|cs| {
             column_mapping
                 .get(&cs.column_name)
-                .ok_or(io::Error::other(format!(
-                "Incomplete CSV import mapping. No mapping for table column '{}'",
+                .ok_or(format!("Incomplete CSV import mapping. No mapping for table column '{}'",
                 cs.column_name
-            ))).and_then(|csv_column_name| {
-                header_map.get(csv_column_name.as_str()).cloned().ok_or(io::Error::other(format!(
-                    "Bad CSV import mapping. Table column '{}' is mapped to CSV column '{}', but that doesn't exist!", cs.column_name, csv_column_name)))
-            }).map(|i| (i, cs))
+            )).and_then(|csv_column_name| {
+                header_map.iter().enumerate().find(|(_, r)| r == csv_column_name).ok_or(format!(
+                    "Bad CSV import mapping. Table column '{}' is mapped to CSV column '{}', but that doesn't exist!", cs.column_name, csv_column_name))
+            }).map(|(i,_)| (i, cs))
         }).collect()});
 
         let header: Vec<(usize, &ColumnSpec)> = match header {
             Ok(header) => header,
-            Err(err) => return Err(err),
+            Err(err) => return Err(io::Error::other(err)),
         };
 
         let mut result: io::Result<()> = Ok(());
-        for (i, line) in lines.enumerate() {
-            let value_map: HashMap<usize, &str> = line.split(",").enumerate().collect();
-
-            let values: io::Result<HashMap<String, Value>> = header
+        for (i, record_result) in reader.records().enumerate() {
+            let values: io::Result<HashMap<String, Value>> = 
+                record_result.map_err(|e| io::Error::other(e)).and_then(|r| {
+                header
                 .iter()
                 .map(|(csv_index, cs)| {
-                    value_map
-                        .get(csv_index)
+                    r
+                        .get(*csv_index)
                         .ok_or(io::Error::other(format!(
                             "Row {} did not contain enough fields to extract column {}",
                             i, cs.column_name
                         )))
                         .and_then(|string_value| {
                             cs.column_type
-                                .parse(&string_value)
+                                .parse(&string_value, with_truncate)
                                 .ok_or(io::Error::other(format!(
-                                    "Row {} failed to parse value '{}' into {:?}",
-                                    i, string_value, cs.column_type
+                                    "Row {} failed to parse value for table column '{}' '{}' into {:?}.", i, cs.column_name, string_value, cs.column_type
                                 )))
                         })
                         .map(|v| (cs.column_name.to_string(), v))
                 })
-                .collect();
+                .collect()
+            });
 
             let row = values.and_then(|values| {
                 Row::new(&values, &self.column_specs)
@@ -128,7 +119,7 @@ impl Table {
 
             match row {
                 Ok(row) => {
-                    self.insert(row);
+                    self.insert(&row);
                 }
                 Err(err) => {
                     result = Err(err);
@@ -137,6 +128,59 @@ impl Table {
             }
         }
         result
+    }
+
+    fn read(buffer: &Vec<u8>, column_specs: &Vec<ColumnSpec>, base: usize) -> Vec<Value> {
+        let mut res = Vec::new();
+        let mut offset: usize = 0;
+        for cs in column_specs {
+            let len = cs.column_type.bytes_len();
+            let bytes = &buffer[(base + offset)..(base + offset + len)];
+
+            let value = match cs.column_type {
+                ColumnType::Varchar { max_len: _ } => {
+                    let str_len_bytes: [u8; 8] = bytes[0..8].try_into().unwrap();
+                    let str_len = usize::from_be_bytes(str_len_bytes);
+                    let str_bytes = &bytes[8..8 + str_len];
+                    Value::Varchar {
+                        value: String::from_utf8(Vec::from(str_bytes)).unwrap(),
+                    }
+                }
+                ColumnType::Number => {
+                    let fixed_bytes: [u8; 8] = bytes.try_into().unwrap();
+                    Value::Number {
+                        value: u64::from_be_bytes(fixed_bytes),
+                    }
+                }
+                ColumnType::Boolean => Value::Boolean {
+                    value: bytes[0] == 1,
+                },
+            };
+
+            res.push(value);
+            offset += len;
+        }
+
+        res
+    }
+
+    pub fn get(&mut self, i: usize) -> Result<Row, RowBuildError> {
+        let (page_no, offset) = self.page_and_offset(i);
+        let page = match self.pages.get_mut(page_no) {
+            Some(page) => page,
+            None => {
+                let page = vec![0; Table::PAGE_SIZE];
+                self.pages.resize(self.pages.len() + 1, page);
+                &mut self.pages[page_no]
+            }
+        };
+
+        let values = Table::read(page, &self.column_specs, offset);
+        let column_values = self.column_specs.iter().zip(values).map(|(cs, v)| {
+            (cs.column_name.clone(), v)
+        }).collect();
+
+        Row::new(&column_values, &self.column_specs)
     }
 }
 
@@ -162,10 +206,13 @@ impl ColumnType {
         }
     }
 
-    fn parse(&self, s: &str) -> Option<Value> {
+    fn parse(&self, s: &str, with_truncate: bool) -> Option<Value> {
         match self {
             ColumnType::Varchar { max_len } if s.len() <= *max_len => Some(Value::Varchar {
                 value: s.to_string(),
+            }),
+            ColumnType::Varchar { max_len } if s.len() > *max_len && with_truncate => Some(Value::Varchar {
+                value: s.take(*max_len).to_string(),
             }),
             ColumnType::Varchar { max_len: _ } => None,
 
@@ -182,7 +229,7 @@ impl ColumnType {
 
 #[derive(Eq, PartialEq, Debug)]
 pub struct Row {
-    values: Vec<(Value, usize)>,
+    pub values: Vec<(Value, usize)>,
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -282,39 +329,6 @@ impl Row {
         }
     }
 
-    fn read(&self, buffer: &Vec<u8>, column_specs: &Vec<ColumnSpec>, base: usize) -> Vec<Value> {
-        let mut res = Vec::new();
-        let mut offset: usize = 0;
-        for cs in column_specs {
-            let len = cs.column_type.bytes_len();
-            let bytes = &buffer[(base + offset)..(base + offset + len)];
-
-            let value = match cs.column_type {
-                ColumnType::Varchar { max_len: _ } => {
-                    let str_len_bytes: [u8; 8] = bytes[0..8].try_into().unwrap();
-                    let str_len = usize::from_be_bytes(str_len_bytes);
-                    let str_bytes = &bytes[8..8 + str_len];
-                    Value::Varchar {
-                        value: String::from_utf8(Vec::from(str_bytes)).unwrap(),
-                    }
-                }
-                ColumnType::Number => {
-                    let fixed_bytes: [u8; 8] = bytes.try_into().unwrap();
-                    Value::Number {
-                        value: u64::from_be_bytes(fixed_bytes),
-                    }
-                }
-                ColumnType::Boolean => Value::Boolean {
-                    value: bytes[0] == 1,
-                },
-            };
-
-            res.push(value);
-            offset += len;
-        }
-
-        res
-    }
 }
 
 #[cfg(test)]
@@ -452,7 +466,7 @@ mod tests {
 
         let table = Table::new(&column_specs);
 
-        assert_eq!(table.row_size, 1 + (8 + (5 * 4)) + 8);
+        assert_eq!(table.row_size, 1 + (8 + 5) + 8);
     }
 
     #[test]
@@ -487,8 +501,97 @@ mod tests {
         let row = Row::new(&column_values, &column_specs).unwrap();
         let mut buffer: Vec<u8> = vec![0; Table::PAGE_SIZE];
         row.write(&mut buffer, 0);
-        let result = row.read(&buffer, &column_specs, 0);
+        let result = Table::read(&buffer, &column_specs, 0);
 
         assert_eq!(values, result);
+    }
+
+    #[test]
+    fn test_table_get() {
+
+        let column_specs = vec![
+            ColumnSpec {
+                column_name: "foo".to_string(),
+                column_type: ColumnType::Boolean,
+            },
+            ColumnSpec {
+                column_name: "bar".to_string(),
+                column_type: ColumnType::Varchar { max_len: 5 },
+            },
+            ColumnSpec {
+                column_name: "baz".to_string(),
+                column_type: ColumnType::Number,
+            },
+        ];
+        let values = vec![
+            Value::Boolean { value: true },
+            Value::Varchar {
+                value: "foo".to_string(),
+            },
+            Value::Number { value: 42 },
+        ];
+        let column_values = column_specs
+            .iter()
+            .map(|c| c.column_name.clone())
+            .zip(values.iter().cloned())
+            .collect();
+
+        let mut table = Table::new(&column_specs);
+        let row = Row::new(&column_values, &column_specs).unwrap();
+        table.insert(&row);
+
+        assert_eq!(Ok(row), table.get(0));
+    }
+
+    #[test]
+    fn test_table_get_2() {
+
+        let column_specs = vec![
+            ColumnSpec {
+                column_name: "foo".to_string(),
+                column_type: ColumnType::Boolean,
+            },
+            ColumnSpec {
+                column_name: "bar".to_string(),
+                column_type: ColumnType::Varchar { max_len: 5 },
+            },
+            ColumnSpec {
+                column_name: "baz".to_string(),
+                column_type: ColumnType::Number,
+            },
+        ];
+        let values1 = vec![
+            Value::Boolean { value: true },
+            Value::Varchar {
+                value: "foo".to_string(),
+            },
+            Value::Number { value: 42 },
+        ];
+        let column_values1 = column_specs
+            .iter()
+            .map(|c| c.column_name.clone())
+            .zip(values1.iter().cloned())
+            .collect();
+        let values2 = vec![
+            Value::Boolean { value: false },
+            Value::Varchar {
+                value: "Bar".to_string(),
+            },
+            Value::Number { value: 21 },
+        ];
+        let column_values2 = column_specs
+            .iter()
+            .map(|c| c.column_name.clone())
+            .zip(values2.iter().cloned())
+            .collect();
+
+        let mut table = Table::new(&column_specs);
+        let row1 = Row::new(&column_values1, &column_specs).unwrap();
+        table.insert(&row1);
+        let row2 = Row::new(&column_values2, &column_specs).unwrap();
+        table.insert(&row2);
+
+        assert_eq!(Ok(row1), table.get(0));
+        assert_eq!(Ok(row2), table.get(1));
     }
 }

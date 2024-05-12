@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     io::{stdin, stdout, Write},
 };
 
@@ -71,6 +70,11 @@ pub fn print_error(message: &str) {
     println!("{}", error.apply_to(message));
 }
 
+pub fn print_success(message: &str) {
+    let success: Style = Style::new().yellow().bold();
+    println!("{}", success.apply_to(message));
+}
+
 pub fn print_insert_success(table_name: &String, row_count: usize) {
     let success: Style = Style::new().green().bold();
     let name_style: Style = Style::new().yellow().bold();
@@ -90,17 +94,18 @@ pub fn print_table(name: &String, table: &Table) {
         vec![ field, field_type ]
     }).collect();
 
-    draw_string_table(&header, &rows);
+    print_string_table(&header, &rows);
 }
 
-fn draw_string_table(header: &Vec<String>, rows: &Vec<Vec<String>>) {
+pub fn print_string_table(header: &Vec<String>, rows: &Vec<Vec<String>>) {
     const PADDING_H: usize = 1;
 
     let column_widths: Vec<usize> = header
         .iter()
-        .map(|h| {
+        .enumerate()
+        .map(|(i, h)| {
             rows.iter()
-                .map(|v| v.len())
+                .map(|r| r.get(i).map(|v|v.len()).unwrap_or_default())
                 .max()
                 .unwrap_or(h.len())
                 .max(h.len()) + (2 * PADDING_H)
@@ -194,6 +199,17 @@ impl std::fmt::Display for table::ColumnType {
             table::ColumnType::Varchar { max_len } => write!(f, "Varchar({})", max_len)?,
             table::ColumnType::Number => write!(f, "number")?,
             table::ColumnType::Boolean => write!(f, "boolean")?,
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for table::Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            table::Value::Varchar { value } => write!(f, "\"{}\"", value)?,
+            table::Value::Number { value } => write!(f, "{}", value)?,
+            table::Value::Boolean { value } => write!(f, "{}", value)?,
         }
         Ok(())
     }

@@ -5,7 +5,7 @@ use nom::{
     bytes::complete::{tag, tag_no_case, take_until},
     character::complete::{self, *},
     combinator::*,
-    multi::separated_list1,
+    multi::{many0, many1, separated_list1},
     sequence::{preceded, terminated, tuple},
     *,
 };
@@ -34,6 +34,7 @@ pub struct CsvImport {
     pub column_mapping: HashMap<String, String>,
     pub file_path: String,
     pub table_name: String,
+    pub with_truncate: bool
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -160,6 +161,7 @@ impl Statement {
         let (input, column_mapping) =
             separated_list1(tag(","), Statement::parse_csv_column_mapping)(input)?;
         let (input, _) = parse_keyword(")")(input)?;
+        let (input, with_truncate) = opt(parse_keyword("truncate"))(input)?;
 
         Ok((
             input,
@@ -167,6 +169,7 @@ impl Statement {
                 column_mapping: column_mapping.into_iter().collect(),
                 file_path,
                 table_name,
+                with_truncate: with_truncate.is_some()
             }),
         ))
     }
@@ -257,6 +260,7 @@ fn parse_keyword<'a>(expected_keyword: &'a str) -> impl Fn(&'a str) -> IResult<&
         ))(input)
     }
 }
+
 
 fn parse_id(input: &str) -> IResult<&str, String> {
     map(
@@ -447,7 +451,32 @@ mod tests {
                     ("date".to_string(), "Date".to_string()),
                     ("region".to_string(), "Region".to_string())
                 ]),
-                file_path: "/home/martinc/spotify.csv".to_string()
+                file_path: "/home/martinc/spotify.csv".to_string(),
+                with_truncate: false
+            }),
+            matched
+        );
+    }
+
+
+    #[test]
+    fn test_csv_import_truncate() {
+        let (remaining, matched) =
+            Statement::parse("import csv from \"/home/martinc/spotify.csv\" into music with (title=Title, artist=Artist, rank=Rank, date=Date, region=Region) truncate")
+                .unwrap();
+        assert_eq!("", remaining);
+        assert_eq!(
+            Statement::CsvImport(CsvImport {
+                table_name: "music".to_string(),
+                column_mapping: HashMap::from_iter([
+                    ("title".to_string(), "Title".to_string()),
+                    ("artist".to_string(), "Artist".to_string()),
+                    ("rank".to_string(), "Rank".to_string()),
+                    ("date".to_string(), "Date".to_string()),
+                    ("region".to_string(), "Region".to_string())
+                ]),
+                file_path: "/home/martinc/spotify.csv".to_string(),
+                with_truncate: true
             }),
             matched
         );

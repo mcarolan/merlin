@@ -5,7 +5,7 @@ mod mapper;
 mod sql_parser;
 mod table;
 
-use std::{collections::HashMap, iter, sync::Mutex};
+use std::{collections::{HashMap, HashSet}, iter, sync::Mutex};
 
 use cli::*;
 use lazy_static::lazy_static;
@@ -27,6 +27,7 @@ fn exec_create_table(fields: &CreateTable) {
         .collect();
     let table = Table::new(&column_specs);
     let mut map = TABLES.lock().unwrap();
+    print_table(&fields.table_name, &table);
     map.insert(fields.table_name.clone(), table);
 }
 
@@ -51,7 +52,7 @@ fn exec_insert(insert: &Insert) {
 
             match row_build {
                 Ok(row) => {
-                    table.insert(row);
+                    table.insert(&row);
                     print_insert_success(&insert.table_name, table.row_count);
                 },
                 Err(err) => print_error(format!("Insert failed. {:?}", err).as_str())
@@ -69,15 +70,43 @@ fn exec_select(select: &Select) {
 
     match table {
         Some(table) => {
-            let named_columns: Vec<String> = select.column_refs.iter().map(|c| match c {
+            let named_columns: HashSet<String> = select.column_refs.iter().map(|c| match c {
                 sql_parser::SelectColumnReference::Named { column_name } => Some(column_name.clone()),
                 sql_parser::SelectColumnReference::Wildcard => None,
             }).flatten().collect();
             let unknown_columns: Vec<&String> = named_columns.iter().filter(|c1| {
                 table.column_specs.iter().filter(|c2| c2.column_name == **c1).count() == 0
             }).collect();
-            
-            todo!()
+
+            if !unknown_columns.is_empty() {
+                print_error(format!("Unknown columns {:?} in select query", unknown_columns).as_str());
+            }
+            else {
+                let has_wildcard = select.column_refs.iter().find(|c| match c {
+                    sql_parser::SelectColumnReference::Named { column_name: _ } => false,
+                    sql_parser::SelectColumnReference::Wildcard => true,
+                }).is_some();
+
+                let mut results = Vec::new();
+
+                let shown_indicies: Vec<usize> = table.column_specs.iter().enumerate().filter(|(_, cs)| has_wildcard || named_columns.contains(&cs.column_name)).map(|(i, _)| i).collect();
+
+                for i in 0..table.row_count {
+                    let row = table.get(i);
+                    match row {
+                        Ok(row) => {
+                            let string_row: Vec<String> = shown_indicies.iter().flat_map(|i| row.values.get(*i)).map(|(v,_)| format!("{}", v)).collect();
+                            results.push(string_row);
+                        },
+                        Err(err) => print_error(format!("Unable to read row {}: {:?}", i, err).as_str()),
+                    }
+                }
+
+                println!("{:?}", results);
+
+                let header = table.column_specs.iter().filter(|cs| has_wildcard || named_columns.contains(&cs.column_name)).map(|cs| cs.column_name.clone()).collect();
+                print_string_table(&header, &results);
+            }
         },
         None => {
             print_error(format!("Insert failed. No table named '{}' is defined.", select.table_name).as_str());
@@ -91,8 +120,8 @@ fn exec_csv_import(import: &CsvImport) {
 
     match table {
         Some(table) => {
-            match table.csv_import(&import.file_path, &import.column_mapping) {
-                Ok(_) => todo!(),
+            match table.csv_import(&import.file_path, &import.column_mapping, import.with_truncate) {
+                Ok(_) => print_success(format!("Woohoo! Table has {} rows.", table.row_count).as_str()),
                 Err(err) => print_error(format!("CSV import failed. {:?}", err).as_str()),
             }
         },
